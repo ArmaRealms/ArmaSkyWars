@@ -1,6 +1,7 @@
 package com.walrusone.skywarsreloaded.commands.player;
 
 import com.walrusone.skywarsreloaded.SkyWarsReloaded;
+import com.walrusone.skywarsreloaded.commands.BaseCmd;
 import com.walrusone.skywarsreloaded.enums.MatchState;
 import com.walrusone.skywarsreloaded.game.GameMap;
 import com.walrusone.skywarsreloaded.managers.MatchManager;
@@ -15,7 +16,10 @@ import org.bukkit.entity.Player;
 
 import java.util.UUID;
 
-public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
+/**
+ * Command to allow players (or parties) to join a game map.
+ */
+public class SWPlayCmd extends BaseCmd {
 
     public SWPlayCmd(String t) {
         type = t;
@@ -27,32 +31,40 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
 
     @Override
     public boolean run(CommandSender sender, Player player, String[] args) {
-        GameMap a = MatchManager.get().getPlayerMap(player);
-        if (a != null) {
+        // Check if the player is already in a game.
+        GameMap currentMap = MatchManager.get().getPlayerMap(player);
+        if (currentMap != null) {
             if (Bukkit.getPluginManager().isPluginEnabled("Skywars-Extension")) {
-                player.sendMessage(SWExtension.c(SWExtension.get().getConfig().getString("already_ingame")));
+                String message = SWExtension.get().getConfig().getString("already_ingame");
+                player.sendMessage(SWExtension.c(message));
             } else {
-                player.sendMessage(new Messaging.MessageFormatter().format("error.already-in-game"));
-            }
-            return true;
-        }
-        // Se não estivermos no lobby, e estivermos em modo bungee, utilizamos o metodo de join simples
-        if (SkyWarsReloaded.getCfg().bungeeMode() && !SkyWarsReloaded.getCfg().isLobbyServer()) {
-            SWRServer server = SWRServer.getAvailableServer();
-            if (server != null) {
-                server.setPlayerCount(server.getPlayerCount() + 1);
-                server.updateSigns();
-                SkyWarsReloaded.get().sendBungeeMsg(player, "Connect", server.getServerName());
+                player.sendMessage(format("error.already-in-game"));
             }
             return true;
         }
 
+        // In bungee mode, if this is not the lobby server, use a simple join method.
+        if (SkyWarsReloaded.getCfg().bungeeMode() && !SkyWarsReloaded.getCfg().isLobbyServer()) {
+            SWRServer availableServer = SWRServer.getAvailableServer();
+            if (availableServer != null) {
+                availableServer.setPlayerCount(availableServer.getPlayerCount() + 1);
+                availableServer.updateSigns();
+                SkyWarsReloaded.get().sendBungeeMsg(player, "Connect", availableServer.getServerName());
+            }
+            return true;
+        }
+
+        // Join a specific map.
         String mapName = args[1];
         return joinSpecificMap(player, mapName);
     }
 
     /**
-     * Tenta inserir o jogador (ou a party) em um mapa específico.
+     * Attempts to join the player (or their party) to the specified game map.
+     *
+     * @param player  The player attempting to join.
+     * @param mapName The name of the map to join.
+     * @return Always returns true.
      */
     private boolean joinSpecificMap(Player player, String mapName) {
         GameMap gameMap = SkyWarsReloaded.getGameMapMgr().getMap(mapName);
@@ -63,11 +75,12 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
 
         SWRServer server = null;
         MatchState matchState;
+        boolean isBungeeLobby = SkyWarsReloaded.getCfg().bungeeMode() && SkyWarsReloaded.getCfg().isLobbyServer();
 
-        // Se estivermos no lobby com bungeeMode, buscamos o servidor associado ao mapa
-        if (SkyWarsReloaded.getCfg().bungeeMode() && SkyWarsReloaded.getCfg().isLobbyServer()) {
+        if (isBungeeLobby) {
             server = SWRServer.getServer(mapName);
             if (server == null) {
+                player.sendMessage(format("error.map-does-not-exist"));
                 return true;
             }
             matchState = server.getMatchState();
@@ -75,27 +88,27 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
             matchState = gameMap.getMatchState();
         }
 
-        // Somente permite join se o mapa estiver em um estado adequado
+        // Only allow joining if the match state is appropriate.
         if (matchState != MatchState.WAITINGSTART && matchState != MatchState.WAITINGLOBBY) {
             Util.get().playSound(player, player.getLocation(), SkyWarsReloaded.getCfg().getErrorSound(), 1, 1);
             player.sendMessage(format("error.could-not-join"));
             return true;
         }
 
-        // Verifica permissão
+        // Check player permission.
         if (!player.hasPermission("sw.play")) {
             player.sendMessage(format("error.no-perm"));
             return true;
         }
 
-        // Fecha o inventário do jogador para evitar conflitos visuais
+        // Close the inventory to avoid visual conflicts.
         player.closeInventory();
 
         Party party = Party.getParty(player);
         boolean joined = false;
 
         if (party != null) {
-            // Apenas o líder pode realizar o join para a party
+            // Only the party leader may initiate the join.
             if (!party.getLeader().equals(player.getUniqueId())) {
                 player.sendMessage(format("party.onlyleader"));
                 return true;
@@ -105,7 +118,7 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
             } else if (server != null && server.canAddParty(party)) {
                 server.setPlayerCount(server.getPlayerCount() + party.getSize() - 1);
                 server.updateSigns();
-                // Para cada membro da party, envia a mensagem para conectar no servidor
+                // Send connection message to each party member.
                 for (UUID memberId : party.getMembers()) {
                     Player member = Bukkit.getPlayer(memberId);
                     if (member != null) {
@@ -115,7 +128,7 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
                 joined = true;
             }
         } else {
-            // Caso seja um jogador individual
+            // Single player join.
             if (gameMap.canAddPlayer(player)) {
                 joined = gameMap.addPlayers(null, player);
             } else if (server != null && server.canAddPlayer()) {
@@ -125,6 +138,7 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
                 joined = true;
             }
         }
+
         if (!joined) {
             player.sendMessage(format("error.could-not-join2"));
         }
@@ -132,7 +146,10 @@ public class SWPlayCmd extends com.walrusone.skywarsreloaded.commands.BaseCmd {
     }
 
     /**
-     * Metodo auxiliar para formatar mensagens.
+     * Helper method to format messages.
+     *
+     * @param key The message key.
+     * @return The formatted message.
      */
     private String format(String key) {
         return new Messaging.MessageFormatter().format(key);
